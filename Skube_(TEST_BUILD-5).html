@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale: 1.0">
+    <title>Infinite 3D World</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+        #custom-cursor {
+            position: absolute;
+            width: 19px; /* Set your cursor size */
+            height: 28px;
+            pointer-events: none; /* Prevent cursor from interfering with clicks */
+            z-index: 10; /* Ensure cursor is above other elements */
+            display: none; /* Hide initially */
+        }
+    </style>
+</head>
+<body>
+    <img id="custom-cursor" src="https://techcommunity.microsoft.com/t5/image/serverpage/image-id/332211i00B4C68911785168/image-size/large?v=v2&px=999" alt="Custom Cursor">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Set the background color to blue
+        scene.background = new THREE.Color(0x87CEEB);
+
+        const blockSize = 1;
+        const chunkSize = 10; // Number of blocks per chunk
+        const viewDistance = 3; // Number of chunks to load
+        const blocks = new Set(); // Store blocks for easy removal
+        const loadedChunks = new Set(); // Track loaded chunks
+
+        // Create materials for checkered pattern
+        const darkGreenMaterial = new THREE.MeshBasicMaterial({ color: 0x004d00 }); // Dark green
+        const lightGreenMaterial = new THREE.MeshBasicMaterial({ color: 0x66cc66 }); // Light green
+
+        // Create the user-controlled rectangle (player)
+        const playerGeometry = new THREE.BoxGeometry(0.5, 1, 0.5);
+        const playerMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+        const player = new THREE.Mesh(playerGeometry, playerMaterial);
+        player.position.set(0, 1, 0); // Spawn at center of the world
+        scene.add(player);
+
+        camera.position.set(0, 15, 25);
+        camera.lookAt(player.position);
+
+        let isJumping = false;
+        let jumpSpeed = 0.1;
+        let gravity = 0.01;
+
+        // Mouse movement variables
+        let isMouseDown = false;
+        let mouseX = 0;
+        let mouseY = 0;
+        let cameraAngleY = Math.PI / 4; // Vertical angle
+        let cameraAngleX = Math.PI; // Horizontal angle
+
+        const customCursor = document.getElementById('custom-cursor');
+
+        // Function to create a block
+        function createBlock(x, z) {
+            const material = (Math.floor(x) + Math.floor(z)) % 2 === 0 ? darkGreenMaterial : lightGreenMaterial; // Checkered pattern
+            const geometry = new THREE.BoxGeometry(blockSize, blockSize, blockSize);
+            const cube = new THREE.Mesh(geometry, material);
+            cube.position.set(x * blockSize, blockSize / 2, z * blockSize);
+            scene.add(cube);
+            blocks.add(cube);
+        }
+
+        // Generate chunks around the player
+        function generateChunks() {
+            const playerChunkX = Math.floor(player.position.x / (chunkSize * blockSize));
+            const playerChunkZ = Math.floor(player.position.z / (chunkSize * blockSize));
+
+            for (let x = -viewDistance; x <= viewDistance; x++) {
+                for (let z = -viewDistance; z <= viewDistance; z++) {
+                    const chunkKey = `${playerChunkX + x}_${playerChunkZ + z}`;
+                    if (!loadedChunks.has(chunkKey)) {
+                        for (let i = 0; i < chunkSize; i++) {
+                            for (let j = 0; j < chunkSize; j++) {
+                                createBlock((playerChunkX + x) * chunkSize + i, (playerChunkZ + z) * chunkSize + j);
+                            }
+                        }
+                        loadedChunks.add(chunkKey);
+                    }
+                }
+            }
+        }
+
+        // Handle mouse clicks to "break" blocks
+        window.addEventListener('click', (event) => {
+            const mouse = new THREE.Vector2();
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = Array.from(blocks).filter(block => block.visible).map(block => raycaster.intersectObject(block)).flat();
+            if (intersects.length > 0) {
+                const block = intersects[0].object;
+                scene.remove(block);
+                blocks.delete(block);
+            }
+        });
+
+        // Update the custom cursor position
+        function updateCustomCursor(event) {
+            customCursor.style.display = 'block'; // Show cursor
+            customCursor.style.left = `${event.clientX - 16}px`; // Center cursor
+            customCursor.style.top = `${event.clientY - 16}px`; // Center cursor
+        }
+
+        // Mouse down event to start tracking movement
+        window.addEventListener('mousedown', (event) => {
+            isMouseDown = true;
+            mouseX = event.clientX;
+            mouseY = event.clientY;
+        });
+
+        // Mouse up event to stop tracking movement
+        window.addEventListener('mouseup', () => {
+            isMouseDown = false;
+        });
+
+        // Mouse move event to rotate camera and update custom cursor
+        window.addEventListener('mousemove', (event) => {
+            updateCustomCursor(event);
+            if (isMouseDown) {
+                const deltaX = event.clientX - mouseX;
+                const deltaY = event.clientY - mouseY;
+                cameraAngleY -= deltaX * 0.01; // Adjust horizontal angle
+                cameraAngleX -= deltaY * 0.01; // Adjust vertical angle
+                mouseX = event.clientX;
+                mouseY = event.clientY;
+            }
+        });
+
+        // Player movement variables
+        let velocity = new THREE.Vector3(0, 0, 0);
+        const moveSpeed = 0.1;
+
+        // Keyboard controls for player movement and jumping
+        window.addEventListener('keydown', (event) => {
+            if (event.key === 'w') {
+                velocity.z = -moveSpeed; // Move forward
+            } else if (event.key === 's') {
+                velocity.z = moveSpeed; // Move backward
+            } else if (event.key === 'a') {
+                velocity.x = -moveSpeed; // Move left
+            } else if (event.key === 'd') {
+                velocity.x = moveSpeed; // Move right
+            } else if (event.key === ' ') {
+                if (!isJumping) {
+                    isJumping = true; // Start jumping
+                }
+            }
+        });
+
+        // Reset velocity on key release
+        window.addEventListener('keyup', (event) => {
+            if (['w', 's'].includes(event.key)) {
+                velocity.z = 0; // Stop forward/backward movement
+            } else if (['a', 'd'].includes(event.key)) {
+                velocity.x = 0; // Stop left/right movement
+            }
+        });
+
+        // Check for collisions
+        function checkCollision() {
+            const playerBoundingBox = new THREE.Box3().setFromObject(player);
+            playerBoundingBox.min.y -= 0.5; // Lower the bounding box to check for ground
+
+            for (const block of blocks) {
+                const blockBoundingBox = new THREE.Box3().setFromObject(block);
+                if (playerBoundingBox.intersectsBox(blockBoundingBox)) {
+                    // Snap player to the top of the block
+                    player.position.y = block.position.y + (blockSize / 2) + (playerGeometry.parameters.height / 2);
+                    return true; // Collision detected
+                }
+            }
+            return false; // No collision detected
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            generateChunks(); // Generate chunks around the player
+
+            // Handle jumping and gravity
+            if (isJumping) {
+                player.position.y += jumpSpeed; // Move up
+                jumpSpeed -= gravity; // Apply gravity
+                if (player.position.y <= 1) {
+                    player.position.y = 1; // Reset to ground level
+                    isJumping = false; // Stop jumping
+                    jumpSpeed = 0.1; // Reset jump speed
+                }
+            } else {
+                // Check for collision
+                if (!checkCollision()) {
+                    // Fall if no collision
+                    player.position.y -= gravity; // Fall down
+                }
+            }
+
+            // Update player position based on velocity
+            player.position.x += velocity.x;
+            player.position.z += velocity.z;
+
+            // Update camera position based on angles
+            camera.position.x = player.position.x + 5 * Math.sin(cameraAngleY) * Math.cos(cameraAngleX);
+            camera.position.y = player.position.y + 2 + 5 * Math.sin(cameraAngleX); // Above player
+            camera.position.z = player.position.z + 5 * Math.cos(cameraAngleY) * Math.cos(cameraAngleX);
+            camera.lookAt(player.position); // Always look at the player
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+    </script>
+</body>
+</html>
